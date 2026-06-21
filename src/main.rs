@@ -45,7 +45,10 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| PathBuf::from("web/dist"));
 
     let app = api::router(state)
-        .nest_service("/", ServeDir::new(static_dir).append_index_html_on_directories(true))
+        .nest_service(
+            "/",
+            ServeDir::new(static_dir).append_index_html_on_directories(true),
+        )
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
 
@@ -62,4 +65,3 @@ async fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
-
