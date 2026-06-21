@@ -34,8 +34,8 @@ pub async fn capture_segment(
     cmd.arg("-an")
         .arg("-vf")
         .arg(capture_filter(config))
-        .arg("-r")
-        .arg(format_float(config.playback_fps))
+        .arg("-fps_mode")
+        .arg("passthrough")
         .args(encoder_args(config))
         .arg(tmp_path);
 
@@ -161,7 +161,10 @@ fn add_source_args(cmd: &mut Command, source: &Source, wall_duration_secs: f64) 
 
 fn capture_filter(config: &ResolvedTimelapseConfig) -> String {
     let mut filters = vec![
-        format!("fps=fps=1/{}", format_float(config.capture_interval_secs)),
+        format!(
+            "select='isnan(prev_selected_t)+gte(t-prev_selected_t\\,{})'",
+            format_float(config.capture_interval_secs)
+        ),
         format!("setpts=N/({}*TB)", format_float(config.playback_fps)),
     ];
 
@@ -229,4 +232,91 @@ fn format_float(value: f64) -> String {
 
 fn escape_concat_path(path: &str) -> String {
     path.replace('\'', "'\\''")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::process::Command as StdCommand;
+
+    use chrono::Utc;
+    use serde_json::Value;
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::models::{Source, SourceKind, SourceStatus};
+
+    #[tokio::test]
+    async fn sparse_capture_segment_uses_playback_duration_not_wall_duration() {
+        if StdCommand::new("ffmpeg").arg("-version").output().is_err()
+            || StdCommand::new("ffprobe").arg("-version").output().is_err()
+        {
+            return;
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let tmp_path = dir.path().join("segment.tmp.mp4");
+        let final_path = dir.path().join("segment.mp4");
+        let source = Source {
+            id: Uuid::new_v4(),
+            name: "synthetic".to_string(),
+            kind: SourceKind::Ffmpeg,
+            url: "lavfi:testsrc2=size=320x180:rate=30".to_string(),
+            rtsp_transport: None,
+            status: SourceStatus::Unknown,
+            last_error: None,
+            latest_frame_path: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let config = ResolvedTimelapseConfig {
+            window_secs: 20.0,
+            capture_interval_secs: 10.0,
+            playback_fps: 30.0,
+            output_duration_secs: 2.0 / 30.0,
+            frame_count: 2,
+            segment_duration_secs: 20.0,
+            rolling: true,
+            codec: "h264".to_string(),
+            bitrate_kbps: 1_200,
+            estimated_bytes: 1,
+            width: None,
+            height: None,
+            warnings: vec![],
+        };
+
+        capture_segment(&source, &config, 20.0, &tmp_path, &final_path)
+            .await
+            .unwrap();
+
+        let output = StdCommand::new("ffprobe")
+            .arg("-v")
+            .arg("error")
+            .arg("-select_streams")
+            .arg("v:0")
+            .arg("-show_entries")
+            .arg("stream=nb_frames")
+            .arg("-show_entries")
+            .arg("format=duration")
+            .arg("-of")
+            .arg("json")
+            .arg(&final_path)
+            .output()
+            .unwrap();
+
+        assert!(output.status.success());
+        let probe: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let duration = probe["format"]["duration"]
+            .as_str()
+            .unwrap()
+            .parse::<f64>()
+            .unwrap();
+        let frames = probe["streams"][0]["nb_frames"]
+            .as_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap();
+
+        assert_eq!(frames, 2);
+        assert!(duration < 1.0, "duration was {duration}");
+    }
 }
