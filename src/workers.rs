@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, fs, path::PathBuf, sync::Arc, time::Duration as StdDuration};
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{Duration, Utc};
@@ -158,6 +158,7 @@ async fn capture_loop(
         }
 
         let captured_start = Utc::now();
+        let wall_started = std::time::Instant::now();
         let segment_id = Uuid::new_v4();
         let tmp_path = segments_dir.join(format!("{}.tmp.mp4", segment_id));
         let final_path = segments_dir.join(format!("{}.mp4", segment_id));
@@ -203,7 +204,8 @@ async fn capture_loop(
             }
         }
 
-        let captured_end = Utc::now();
+        let captured_end = captured_start
+            + Duration::milliseconds((wall_duration * 1_000.0).round().max(1.0) as i64);
         let bytes = tokio::fs::metadata(&final_path)
             .await
             .with_context(|| format!("stat {}", final_path.display()))?
@@ -244,6 +246,7 @@ async fn capture_loop(
 
         if timelapse.config.rolling {
             prune_rolling_window(&state, &timelapse).await?;
+            sleep_remaining_wall_time(wall_duration, wall_started, &mut stop_rx).await?;
         } else {
             state
                 .db
@@ -251,6 +254,21 @@ async fn capture_loop(
             return Ok(());
         }
     }
+}
+
+async fn sleep_remaining_wall_time(
+    wall_duration_secs: f64,
+    started: std::time::Instant,
+    stop_rx: &mut watch::Receiver<bool>,
+) -> Result<()> {
+    let target = StdDuration::from_secs_f64(wall_duration_secs.max(0.0));
+    if let Some(remaining) = target.checked_sub(started.elapsed()) {
+        tokio::select! {
+            _ = stop_rx.changed() => {}
+            _ = tokio::time::sleep(remaining) => {}
+        }
+    }
+    Ok(())
 }
 
 async fn prune_rolling_window(state: &AppState, timelapse: &Timelapse) -> Result<()> {
