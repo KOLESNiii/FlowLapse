@@ -1,0 +1,12 @@
+target/
+data/
+web/dist/
+web/node_modules/
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+!.env.example
+*.log
+
