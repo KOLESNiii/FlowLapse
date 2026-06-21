@@ -89,10 +89,16 @@ pub async fn export_segments(
     }
 
     let list_path = output_path.with_extension("concat.txt");
-    let concat = segments
-        .iter()
-        .map(|segment| format!("file '{}'\n", escape_concat_path(&segment.path)))
-        .collect::<String>();
+    let mut concat = String::new();
+    for segment in segments {
+        let path = tokio::fs::canonicalize(&segment.path)
+            .await
+            .unwrap_or_else(|_| PathBuf::from(&segment.path));
+        concat.push_str(&format!(
+            "file '{}'\n",
+            escape_concat_path(&path.to_string_lossy())
+        ));
+    }
     tokio::fs::write(&list_path, concat).await?;
 
     let tmp_output = output_path.with_extension(format!("{format}.tmp"));
