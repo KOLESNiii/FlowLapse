@@ -8,6 +8,7 @@ import {
   Plus,
   RefreshCw,
   SlidersHorizontal,
+  Trash2,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
@@ -139,7 +140,7 @@ export function App() {
   const [busy, setBusy] = useState(false);
 
   const selected = useMemo(
-    () => timelapses.find((job) => job.id === selectedId) ?? timelapses[0] ?? null,
+    () => timelapses.find((job) => job.id === selectedId) ?? null,
     [selectedId, timelapses]
   );
 
@@ -152,9 +153,8 @@ export function App() {
       setDetail(null);
       return;
     }
-    setSelectedId(selected.id);
     void api<TimelapseDetail>(`/api/timelapses/${selected.id}`).then(setDetail).catch(setApiMessage);
-  }, [selected?.id]);
+  }, [selected?.id, selected?.updated_at]);
 
   useEffect(() => {
     const handle = window.setInterval(() => {
@@ -191,12 +191,13 @@ export function App() {
       setSources(nextSources);
       setTimelapses(nextTimelapses);
       setExports(nextExports);
-      if (!jobSourceId && nextSources[0]) {
-        setJobSourceId(nextSources[0].id);
-      }
-      if (!selectedId && nextTimelapses[0]) {
-        setSelectedId(nextTimelapses[0].id);
-      }
+      setJobSourceId((current) => current || nextSources[0]?.id || "");
+      setSelectedId((current) => {
+        if (current && nextTimelapses.some((job) => job.id === current)) {
+          return current;
+        }
+        return nextTimelapses[0]?.id ?? null;
+      });
       if (!options.quiet) {
         setMessage("Dashboard refreshed");
       }
@@ -294,6 +295,34 @@ export function App() {
       });
       setExports((items) => [record, ...items]);
       setMessage("Export queued");
+    } catch (error) {
+      setApiMessage(error);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteSelectedTimelapse() {
+    if (!selected) return;
+    const confirmed = window.confirm(`Delete "${selected.name}" and its stored segments/exports?`);
+    if (!confirmed) return;
+
+    setBusy(true);
+    try {
+      await api<{ id: string }>(`/api/timelapses/${selected.id}`, {
+        method: "DELETE",
+      });
+      const remaining = timelapses.filter((item) => item.id !== selected.id);
+      setTimelapses(remaining);
+      setSelectedId((current) => {
+        if (current !== selected.id) return current;
+        return remaining[0]?.id ?? null;
+      });
+      setDetail(null);
+      setPreviewUrl(null);
+      setExports((items) => items.filter((item) => item.timelapse_id !== selected.id));
+      setMessage("Timelapse deleted");
+      await refresh({ quiet: true });
     } catch (error) {
       setApiMessage(error);
     } finally {
@@ -462,6 +491,13 @@ export function App() {
                   </button>
                   <button onClick={() => void controlTimelapse("stop")} disabled={busy}>
                     <Pause size={16} /> Stop
+                  </button>
+                  <button
+                    className="danger-button"
+                    onClick={() => void deleteSelectedTimelapse()}
+                    disabled={busy}
+                  >
+                    <Trash2 size={16} /> Delete
                   </button>
                 </div>
               </div>

@@ -36,7 +36,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/api/timelapses",
             get(list_timelapses).post(create_timelapse),
         )
-        .route("/api/timelapses/:id", get(get_timelapse))
+        .route(
+            "/api/timelapses/:id",
+            get(get_timelapse).delete(delete_timelapse),
+        )
         .route("/api/timelapses/:id/start", post(start_timelapse))
         .route("/api/timelapses/:id/stop", post(stop_timelapse))
         .route("/api/timelapses/:id/latest-frame", get(latest_frame))
@@ -131,6 +134,51 @@ async fn get_timelapse(
         source,
         segments,
         running: state.workers.is_running(id),
+    }))
+}
+
+async fn delete_timelapse(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<DeleteTimelapseResponse>, ApiError> {
+    let timelapse = state
+        .db
+        .get_timelapse(id)?
+        .ok_or_else(|| ApiError::not_found("timelapse not found"))?;
+    let segments = state.db.list_segments(id)?;
+    let exports = state.db.list_exports_for_timelapse(id)?;
+
+    state.workers.abort(id);
+
+    if !state.db.delete_timelapse(id)? {
+        return Err(ApiError::not_found("timelapse not found"));
+    }
+
+    let mut files_removed = 0usize;
+    for segment in segments {
+        if remove_file_if_exists(PathBuf::from(segment.path)).await? {
+            files_removed += 1;
+        }
+    }
+    for export in exports {
+        if remove_file_if_exists(PathBuf::from(export.path)).await? {
+            files_removed += 1;
+        }
+    }
+
+    let preview = state.data_dir.join("previews").join(format!("{id}.mp4"));
+    if remove_file_if_exists(preview).await? {
+        files_removed += 1;
+    }
+
+    let timelapse_dir = state.data_dir.join("timelapses").join(id.to_string());
+    let directory_removed = remove_dir_if_exists(timelapse_dir).await?;
+
+    Ok(Json(DeleteTimelapseResponse {
+        id,
+        name: timelapse.name,
+        files_removed,
+        directory_removed,
     }))
 }
 
@@ -236,6 +284,22 @@ async fn send_file(path: PathBuf, content_type: &'static str) -> Result<Response
     Ok(response)
 }
 
+async fn remove_file_if_exists(path: PathBuf) -> Result<bool, ApiError> {
+    match tokio::fs::remove_file(&path).await {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(ApiError::from(anyhow::Error::from(error))),
+    }
+}
+
+async fn remove_dir_if_exists(path: PathBuf) -> Result<bool, ApiError> {
+    match tokio::fs::remove_dir_all(&path).await {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(ApiError::from(anyhow::Error::from(error))),
+    }
+}
+
 #[derive(Serialize)]
 struct TimelapseDetail {
     timelapse: Timelapse,
@@ -248,6 +312,14 @@ struct TimelapseDetail {
 struct FileJobResponse {
     path: String,
     url: String,
+}
+
+#[derive(Serialize)]
+struct DeleteTimelapseResponse {
+    id: Uuid,
+    name: String,
+    files_removed: usize,
+    directory_removed: bool,
 }
 
 #[derive(Debug, Serialize)]

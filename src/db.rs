@@ -263,6 +263,14 @@ impl Database {
         .map_err(Into::into)
     }
 
+    pub fn delete_timelapse(&self, id: Uuid) -> Result<bool> {
+        let deleted = self.conn.lock().execute(
+            "DELETE FROM timelapses WHERE id = ?1",
+            params![id.to_string()],
+        )?;
+        Ok(deleted > 0)
+    }
+
     pub fn set_timelapse_status(
         &self,
         id: Uuid,
@@ -413,6 +421,16 @@ impl Database {
              FROM exports ORDER BY created_at DESC",
         )?;
         let rows = stmt.query_map([], map_export)?;
+        collect_rows(rows)
+    }
+
+    pub fn list_exports_for_timelapse(&self, timelapse_id: Uuid) -> Result<Vec<Export>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, timelapse_id, path, format, status, bytes, error, created_at, completed_at
+             FROM exports WHERE timelapse_id = ?1 ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map(params![timelapse_id.to_string()], map_export)?;
         collect_rows(rows)
     }
 

@@ -104,6 +104,15 @@ button:disabled {
   background: #e8eee8;
 }
 
+.danger-button {
+  background: #8f2f25;
+  border-color: #8f2f25;
+}
+
+.danger-button:hover {
+  background: #a33a2d;
+}
+
 input,
 select {
   background: #ffffff;

@@ -3,7 +3,7 @@ use std::{collections::HashMap, fs, path::PathBuf, sync::Arc, time::Duration as 
 use anyhow::{anyhow, Context, Result};
 use chrono::{Duration, Utc};
 use parking_lot::Mutex;
-use tokio::sync::watch;
+use tokio::{sync::watch, task::JoinHandle};
 use uuid::Uuid;
 
 use crate::{
@@ -19,6 +19,7 @@ pub struct WorkerManager {
 
 struct RunningJob {
     stop_tx: watch::Sender<bool>,
+    handle: JoinHandle<()>,
 }
 
 impl WorkerManager {
@@ -40,9 +41,6 @@ impl WorkerManager {
             .ok_or_else(|| anyhow!("source not found: {}", timelapse.source_id))?;
 
         let (stop_tx, stop_rx) = watch::channel(false);
-        self.jobs
-            .lock()
-            .insert(timelapse_id, RunningJob { stop_tx });
 
         state
             .db
@@ -50,7 +48,7 @@ impl WorkerManager {
 
         let manager = self.clone();
         let task_state = state.clone();
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let result = capture_loop(task_state.clone(), timelapse.clone(), source, stop_rx).await;
             manager.jobs.lock().remove(&timelapse.id);
             if let Err(error) = result {
@@ -62,6 +60,9 @@ impl WorkerManager {
                 );
             }
         });
+        self.jobs
+            .lock()
+            .insert(timelapse_id, RunningJob { stop_tx, handle });
 
         state
             .db
@@ -84,6 +85,13 @@ impl WorkerManager {
 
     pub fn is_running(&self, timelapse_id: Uuid) -> bool {
         self.jobs.lock().contains_key(&timelapse_id)
+    }
+
+    pub fn abort(&self, timelapse_id: Uuid) {
+        if let Some(running) = self.jobs.lock().remove(&timelapse_id) {
+            let _ = running.stop_tx.send(true);
+            running.handle.abort();
+        }
     }
 }
 
