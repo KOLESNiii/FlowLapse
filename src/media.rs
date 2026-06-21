@@ -131,7 +131,7 @@ pub async fn export_segments(
     } else {
         cmd.arg("-c").arg("copy");
     }
-    cmd.arg(&tmp_output);
+    cmd.arg("-f").arg(format).arg(&tmp_output);
 
     let result = run_command(cmd, "export segments").await;
     let _ = tokio::fs::remove_file(&list_path).await;
