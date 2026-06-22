@@ -135,12 +135,16 @@ pub async fn queue_export(
 }
 
 pub async fn create_preview(state: Arc<AppState>, timelapse_id: Uuid) -> Result<PathBuf> {
+    let timelapse = state
+        .db
+        .get_timelapse(timelapse_id)?
+        .ok_or_else(|| anyhow!("timelapse not found: {timelapse_id}"))?;
     let segments = state.db.list_exportable_segments(timelapse_id)?;
     let selected = tail_segments(segments, 12);
     let preview_dir = state.data_dir.join("previews");
     tokio::fs::create_dir_all(&preview_dir).await?;
     let preview_path = preview_dir.join(format!("{timelapse_id}.mp4"));
-    media::export_segments(&selected, &preview_path, "mp4", true).await?;
+    media::export_preview_frames(&selected, &preview_path, timelapse.config.playback_fps).await?;
     Ok(preview_path)
 }
 
